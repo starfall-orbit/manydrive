@@ -85,6 +85,8 @@ internal fun App(
     superDark: Boolean = false,
     setThemeMode: (ThemeMode) -> Unit = {},
     setSuperDark: (Boolean) -> Unit = {},
+    showHiddenSystemFiles: Boolean = false,
+    setShowHiddenSystemFiles: (Boolean) -> Unit = {},
     clearCache: () -> Unit = {},
     viewer: ViewerState? = null,
     openFile: (DriveFile, List<DriveFile>) -> Unit = { _, _ -> },
@@ -105,8 +107,12 @@ internal fun App(
     var removing by remember { mutableStateOf<AccountEntry?>(null) }
     val systemFilesState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     var showSystemFiles by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
-    val systemFilesRoot = remember { Environment.getExternalStorageDirectory().path }
-    var systemFilesDirectory by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(systemFilesRoot) }
+    val defaultSystemFilesRoot = remember {
+        runCatching { Environment.getExternalStorageDirectory().canonicalPath }
+            .getOrElse { Environment.getExternalStorageDirectory().absolutePath }
+    }
+    var systemFilesRoot by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(defaultSystemFilesRoot) }
+    var systemFilesDirectory by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(defaultSystemFilesRoot) }
     var systemFilesRevision by remember { mutableIntStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
     var showFabMenu by remember { mutableStateOf(false) }
@@ -469,13 +475,23 @@ internal fun App(
                             onTextChange = updateViewerText,
                             onSaveText = saveViewerText
                         )
-                        showSettings -> SettingsPage(padding, themeMode, superDark, setThemeMode, setSuperDark, clearCache)
+                        showSettings -> SettingsPage(
+                            padding, themeMode, superDark, showHiddenSystemFiles,
+                            setThemeMode, setSuperDark, setShowHiddenSystemFiles, clearCache
+                        )
                         showSystemFiles -> systemFilesState.SaveableStateProvider("system-files") {
                             SystemFilesPage(
                                 padding = padding,
+                                rootPath = systemFilesRoot,
                                 directory = systemFilesDirectory,
                                 revision = systemFilesRevision,
+                                showHiddenFiles = showHiddenSystemFiles,
                                 onDirectoryChange = { systemFilesDirectory = it },
+                                onRootChange = { root ->
+                                    systemFilesRoot = root
+                                    systemFilesDirectory = root
+                                    systemFilesRevision++
+                                },
                                 onRefresh = { systemFilesRevision++ },
                                 onExit = { showSystemFiles = false },
                                 openFile = openLocalFile,

@@ -39,8 +39,10 @@ fun SettingsPage(
     padding: PaddingValues,
     mode: ThemeMode,
     superDark: Boolean,
+    showHiddenSystemFiles: Boolean,
     setMode: (ThemeMode) -> Unit,
     setSuperDark: (Boolean) -> Unit,
+    setShowHiddenSystemFiles: (Boolean) -> Unit,
     clearCache: () -> Unit
 ) {
     val context = LocalContext.current
@@ -81,6 +83,14 @@ fun SettingsPage(
             subtitle = tr("Dùng nền đen thuần khi giao diện tối đang bật"),
             checked = superDark,
             onCheckedChange = setSuperDark
+        )
+
+        SettingsSectionTitle(tr("Tệp Hệ Thống"))
+        SettingsSwitchRow(
+            title = tr("Hiển thị tệp ẩn"),
+            subtitle = tr("Hiển thị tệp và thư mục bắt đầu bằng dấu chấm trong Tệp Hệ Thống"),
+            checked = showHiddenSystemFiles,
+            onCheckedChange = setShowHiddenSystemFiles
         )
 
         SettingsSectionTitle(tr("Bộ nhớ đệm của tài liệu"))

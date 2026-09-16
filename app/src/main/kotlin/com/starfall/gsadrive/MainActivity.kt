@@ -231,6 +231,7 @@ class MainActivity : ComponentActivity() {
     private val listingCache by lazy { FileListCache(File(cacheDir, "file-lists")) }
     private var themeMode by mutableStateOf(ThemeMode.SYSTEM)
     private var superDark by mutableStateOf(false)
+    private var showHiddenSystemFiles by mutableStateOf(false)
     private var pendingUploadParent: String? = null
     private var s3Accounts = S3Accounts()
     private var serviceAccounts = emptyList<ServiceAccountCredentials>()
@@ -312,6 +313,7 @@ class MainActivity : ComponentActivity() {
         }
         themeMode = runCatching { ThemeMode.valueOf(selection.getString("theme", "SYSTEM")!!) }.getOrDefault(ThemeMode.SYSTEM)
         superDark = selection.getBoolean("superDark", false)
+        showHiddenSystemFiles = selection.getBoolean("showHiddenSystemFiles", false)
         pendingUploadParent = savedInstanceState?.getString("uploadParent")
         pendingAuthorization = savedInstanceState?.getString("authorizationAccount")
         pendingPhotosAuthorization = savedInstanceState?.getString("photosAuthorizationAccount")
@@ -431,6 +433,8 @@ class MainActivity : ComponentActivity() {
                     themeMode, superDark,
                     { themeMode = it; selection.edit().putString("theme", it.name).apply() },
                     { superDark = it; selection.edit().putBoolean("superDark", it).apply() },
+                    showHiddenSystemFiles,
+                    { showHiddenSystemFiles = it; selection.edit().putBoolean("showHiddenSystemFiles", it).apply() },
                     { lifecycleScope.launch {
                         withContext(Dispatchers.IO) { listingCache.clearAll() }
                         Toast.makeText(this@MainActivity, tr("Đã xóa cache danh sách tệp"), Toast.LENGTH_SHORT).show()

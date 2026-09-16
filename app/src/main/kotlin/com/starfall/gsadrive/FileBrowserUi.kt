@@ -310,7 +310,8 @@ internal fun FileBrowserPage(
     actions: FileActionCallbacks = FileActionCallbacks(),
     browserKey: String = account?.key ?: "empty",
     showEmptyMessage: Boolean = account != null,
-    localMenu: ((DriveFile) -> Unit)? = null
+    localMenu: ((DriveFile) -> Unit)? = null,
+    toolbarAction: (@Composable () -> Unit)? = null
 ) {
     val scopeKey = "${browserKey}:${if (shared) 1 else 0}:${model.path.lastOrNull()?.id.orEmpty()}"
     val defaultSort = when {
@@ -459,6 +460,7 @@ internal fun FileBrowserPage(
                             }
                         }
                     }
+                    toolbarAction?.invoke()
                 }
                 if (!selectionMode) Spacer(Modifier.weight(1f))
                 Surface(shape = RoundedCornerShape(28.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
