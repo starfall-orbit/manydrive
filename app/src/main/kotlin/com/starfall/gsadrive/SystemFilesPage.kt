@@ -13,8 +13,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,6 +39,10 @@ import java.util.TimeZone
 @Composable
 internal fun SystemFilesPage(
     padding: PaddingValues,
+    directory: String,
+    revision: Int,
+    onDirectoryChange: (String) -> Unit,
+    onRefresh: () -> Unit,
     onExit: () -> Unit,
     openFile: (DriveFile, List<DriveFile>) -> Unit,
     handleBack: Boolean,
@@ -49,29 +51,39 @@ internal fun SystemFilesPage(
 ) {
     val context = LocalContext.current
     val access = remember { LocalFileAccess(Environment.getExternalStorageDirectory()) }
-    var directory by rememberSaveable { mutableStateOf(access.root.path) }
     var actionFile by remember { mutableStateOf<DriveFile?>(null) }
     var query by rememberSaveable { mutableStateOf("") }
     var legacyRequested by rememberSaveable { mutableStateOf(false) }
     var requested by rememberSaveable { mutableStateOf(false) }
-    var revision by remember { mutableIntStateOf(0) }
     var permissionError by remember { mutableStateOf<String?>(null) }
-    fun canRead(): Boolean = if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
-        else ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED &&
+
+    fun canRead(): Boolean = if (Build.VERSION.SDK_INT >= 30) {
+        Environment.isExternalStorageManager()
+    } else {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+    }
+
     var allowed by remember { mutableStateOf(canRead()) }
     val settingsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        allowed = canRead(); revision++
+        allowed = canRead()
+        onRefresh()
     }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        allowed = canRead(); revision++
+        allowed = canRead()
+        onRefresh()
     }
+
     fun requestAccess() {
         permissionError = null
         if (Build.VERSION.SDK_INT >= 30) {
             try {
-                settingsLauncher.launch(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                    Uri.parse("package:${context.packageName}")))
+                settingsLauncher.launch(
+                    Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:${context.packageName}")
+                    )
+                )
             } catch (_: android.content.ActivityNotFoundException) {
                 try {
                     settingsLauncher.launch(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
@@ -81,30 +93,58 @@ internal fun SystemFilesPage(
             }
         } else {
             val activity = context as? android.app.Activity
-            if (legacyRequested && activity != null &&
-                !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
-                settingsLauncher.launch(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                    Uri.parse("package:${context.packageName}")))
+            if (
+                legacyRequested && activity != null &&
+                !androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(
+                    activity,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+                )
+            ) {
+                settingsLauncher.launch(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:${context.packageName}")
+                    )
+                )
             } else {
                 legacyRequested = true
-                permissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE))
+                permissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.READ_EXTERNAL_STORAGE,
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    )
+                )
             }
         }
     }
+
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) { allowed = canRead(); revision++ }
+            if (event == Lifecycle.Event.ON_RESUME) {
+                allowed = canRead()
+                onRefresh()
+            }
         }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
     }
+    LaunchedEffect(revision) { allowed = canRead() }
+
     LaunchedEffect(Unit) {
-        if (!allowed && !requested) { requested = true; requestAccess() }
+        if (!allowed && !requested) {
+            requested = true
+            requestAccess()
+        }
     }
+    LaunchedEffect(directory) { query = "" }
+
     var model by remember { mutableStateOf(Model(loading = true)) }
     LaunchedEffect(directory, revision, allowed) {
-        if (!allowed) { model = Model(); return@LaunchedEffect }
+        if (!allowed) {
+            model = Model()
+            return@LaunchedEffect
+        }
         model = Model(loading = true)
         val result = withContext(Dispatchers.IO) {
             runCatching {
@@ -113,11 +153,18 @@ internal fun SystemFilesPage(
                 }
                 access.list(directory).map { file ->
                     DriveFile(
-                        id = file.path, name = file.name,
-                        mimeType = if (file.isDirectory) "application/vnd.google-apps.folder" else
+                        id = file.path,
+                        name = file.name,
+                        mimeType = if (file.isDirectory) {
+                            "application/vnd.google-apps.folder"
+                        } else {
                             MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase())
-                                ?: if (file.extension.lowercase() in setOf("md", "log", "kt", "json", "yaml", "toml")) "text/plain"
-                                else "application/octet-stream",
+                                ?: if (file.extension.lowercase() in setOf("md", "log", "kt", "json", "yaml", "toml")) {
+                                    "text/plain"
+                                } else {
+                                    "application/octet-stream"
+                                }
+                        },
                         modifiedTime = dateFormat.format(Date(file.lastModified())),
                         size = if (file.isFile) file.length() else null
                     )
@@ -129,39 +176,61 @@ internal fun SystemFilesPage(
             onFailure = { Model(message = tr("Không thể đọc thư mục này. Kiểm tra quyền truy cập.")) }
         )
     }
+
     fun goBack() {
-        if (directory == access.root.path) onExit()
-        else { directory = File(directory).parent ?: access.root.path; query = "" }
-    }
-    BackHandler(enabled = handleBack && actionFile == null, onBack = ::goBack)
-    Column(Modifier.fillMaxSize().padding(padding)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = ::goBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, tr("Quay lại")) }
-            Text("/sdcard/" + File(directory).relativeTo(access.root).path,
-                modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
-                maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-            IconButton(onClick = { allowed = canRead(); revision++ }) { Icon(Icons.Outlined.Refresh, tr("Làm mới")) }
+        if (directory == access.root.path) {
+            onExit()
+        } else {
+            onDirectoryChange(File(directory).parent ?: access.root.path)
         }
+    }
+
+    BackHandler(enabled = handleBack && actionFile == null, onBack = ::goBack)
+
+    Column(Modifier.fillMaxSize().padding(padding)) {
         if (!allowed) {
-            Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically)) {
+            Column(
+                Modifier.fillMaxSize().padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically)
+            ) {
                 Icon(Icons.Outlined.Storage, null, Modifier.size(40.dp), tint = MaterialTheme.colorScheme.primary)
                 Text(permissionError ?: tr("Cho phép truy cập bộ nhớ để duyệt tệp trên thiết bị."))
                 FilledTonalButton(onClick = ::requestAccess) { Text(tr("Cấp quyền truy cập")) }
             }
         } else {
-            OutlinedTextField(query, { query = it }, singleLine = true,
+            OutlinedTextField(
+                query,
+                { query = it },
+                singleLine = true,
                 placeholder = { Text(tr("Tìm trong thư mục")) },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp))
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
+            )
             if (model.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
-            FileBrowserPage(model, PaddingValues(0.dp), account = null, shared = false, query = query,
-                authorize = {}, openFolder = { directory = it.id; query = "" }, openFile = openFile,
-                browserKey = "local:$directory", showEmptyMessage = true, localMenu = { actionFile = it })
+            FileBrowserPage(
+                model,
+                PaddingValues(0.dp),
+                account = null,
+                shared = false,
+                query = query,
+                authorize = {},
+                openFolder = { onDirectoryChange(it.id) },
+                openFile = openFile,
+                browserKey = "local:$directory",
+                showEmptyMessage = true,
+                localMenu = { actionFile = it }
+            )
         }
     }
-    actionFile?.let { selected ->
-        LocalFileActions(selected, access, cloudDestination, uploadLocal,
-            onChanged = { revision++ }, onDismiss = { actionFile = null })
-    }
 
+    actionFile?.let { selected ->
+        LocalFileActions(
+            selected,
+            access,
+            cloudDestination,
+            uploadLocal,
+            onChanged = onRefresh,
+            onDismiss = { actionFile = null }
+        )
+    }
 }

@@ -2,6 +2,8 @@ package com.starfall.gsadrive
 
 import com.starfall.gsadrive.ui.CopyableError
 
+import android.os.Environment
+import java.io.File
 import android.content.res.Configuration
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
@@ -103,6 +105,9 @@ internal fun App(
     var removing by remember { mutableStateOf<AccountEntry?>(null) }
     val systemFilesState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     var showSystemFiles by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
+    val systemFilesRoot = remember { Environment.getExternalStorageDirectory().path }
+    var systemFilesDirectory by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(systemFilesRoot) }
+    var systemFilesRevision by remember { mutableIntStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
     var showFabMenu by remember { mutableStateOf(false) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
@@ -292,6 +297,36 @@ internal fun App(
                                 onRefresh = reload,
                                 onAccounts = openAccounts
                             )
+                        !appViewerExpanded && !showSettings && showSystemFiles -> TopAppBar(
+                            title = {
+                                Text(
+                                    if (systemFilesDirectory == systemFilesRoot) tr("Tệp Hệ Thống")
+                                    else File(systemFilesDirectory).name.ifBlank { tr("Tệp Hệ Thống") },
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            navigationIcon = {
+                                if (systemFilesDirectory == systemFilesRoot) {
+                                    IconButton(onClick = { drawerScope.launch { drawerState.open() } }) {
+                                        Icon(Icons.Outlined.Menu, tr("Mở menu"))
+                                    }
+                                } else {
+                                    IconButton(onClick = {
+                                        systemFilesDirectory = File(systemFilesDirectory).parent ?: systemFilesRoot
+                                    }) {
+                                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, tr("Quay lại"))
+                                    }
+                                }
+                            },
+                            actions = {
+                                IconButton(onClick = { systemFilesRevision++ }) {
+                                    Icon(Icons.Outlined.Refresh, tr("Làm mới"))
+                                }
+                            },
+                            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
+                        )
                         !appViewerExpanded && showSettings -> TopAppBar(
                             title = {
                                 Text(tr("Cài đặt"), style = MaterialTheme.typography.headlineSmall)
@@ -307,7 +342,6 @@ internal fun App(
                             title = {
                                 Text(when {
                                     appViewerExpanded -> viewer?.file?.name.orEmpty()
-                                    showSystemFiles -> tr("Tệp Hệ Thống")
                                     selected == 3 -> tr("Thùng rác")
                                     else -> "ManyDrive"
                                 }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -438,7 +472,12 @@ internal fun App(
                         showSettings -> SettingsPage(padding, themeMode, superDark, setThemeMode, setSuperDark, clearCache)
                         showSystemFiles -> systemFilesState.SaveableStateProvider("system-files") {
                             SystemFilesPage(
-                                padding = padding, onExit = { showSystemFiles = false },
+                                padding = padding,
+                                directory = systemFilesDirectory,
+                                revision = systemFilesRevision,
+                                onDirectoryChange = { systemFilesDirectory = it },
+                                onRefresh = { systemFilesRevision++ },
+                                onExit = { showSystemFiles = false },
                                 openFile = openLocalFile,
                                 uploadLocal = uploadLocalFile,
                                 cloudDestination = active?.let { it.title + " / " + model.path.joinToString(" / ") { folder -> folder.name } },
