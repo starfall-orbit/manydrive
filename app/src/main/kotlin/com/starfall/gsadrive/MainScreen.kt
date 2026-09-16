@@ -113,6 +113,8 @@ internal fun App(
     }
     var systemFilesRoot by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(defaultSystemFilesRoot) }
     var systemFilesDirectory by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(defaultSystemFilesRoot) }
+    var systemFilesQuery by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf("") }
+    var systemFilesSearching by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var systemFilesRevision by remember { mutableIntStateOf(0) }
     var showSettings by remember { mutableStateOf(false) }
     var showFabMenu by remember { mutableStateOf(false) }
@@ -224,6 +226,10 @@ internal fun App(
     BackHandler(enabled = !viewerExpanded && showFabMenu) { showFabMenu = false }
     BackHandler(enabled = !viewerExpanded && drawerState.isOpen && !showFabMenu) { drawerScope.launch { drawerState.close() } }
     BackHandler(enabled = !appViewerExpanded && showSettings && !drawerState.isOpen) { showSettings = false }
+    BackHandler(enabled = !viewerExpanded && showSystemFiles && systemFilesSearching && !drawerState.isOpen) {
+        systemFilesQuery = ""
+        systemFilesSearching = false
+    }
     BackHandler(
         enabled = !viewerExpanded && selected == 3 && !showFabMenu && !drawerState.isOpen && !showSettings && !showSystemFiles &&
             !showAccounts && !showTypes && !addingS3
@@ -305,13 +311,29 @@ internal fun App(
                             )
                         !appViewerExpanded && !showSettings && showSystemFiles -> TopAppBar(
                             title = {
-                                Text(
-                                    if (systemFilesDirectory == systemFilesRoot) tr("Tệp Hệ Thống")
-                                    else File(systemFilesDirectory).name.ifBlank { tr("Tệp Hệ Thống") },
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                if (systemFilesSearching) {
+                                    TextField(
+                                        value = systemFilesQuery,
+                                        onValueChange = { systemFilesQuery = it },
+                                        placeholder = { Text(tr("Tìm trong thư mục")) },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = TextFieldDefaults.colors(
+                                            focusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                            unfocusedContainerColor = androidx.compose.ui.graphics.Color.Transparent,
+                                            focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                            unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
+                                        )
+                                    )
+                                } else {
+                                    Text(
+                                        if (systemFilesDirectory == systemFilesRoot) tr("Tệp Hệ Thống")
+                                        else File(systemFilesDirectory).name.ifBlank { tr("Tệp Hệ Thống") },
+                                        style = MaterialTheme.typography.headlineSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             },
                             navigationIcon = {
                                 if (systemFilesDirectory == systemFilesRoot) {
@@ -320,6 +342,8 @@ internal fun App(
                                     }
                                 } else {
                                     IconButton(onClick = {
+                                        systemFilesQuery = ""
+                                        systemFilesSearching = false
                                         systemFilesDirectory = File(systemFilesDirectory).parent ?: systemFilesRoot
                                     }) {
                                         Icon(Icons.AutoMirrored.Outlined.ArrowBack, tr("Quay lại"))
@@ -327,8 +351,20 @@ internal fun App(
                                 }
                             },
                             actions = {
-                                IconButton(onClick = { systemFilesRevision++ }) {
-                                    Icon(Icons.Outlined.Refresh, tr("Làm mới"))
+                                if (systemFilesSearching) {
+                                    IconButton(onClick = {
+                                        systemFilesQuery = ""
+                                        systemFilesSearching = false
+                                    }) {
+                                        Icon(Icons.Outlined.Close, tr("Đóng tìm kiếm"))
+                                    }
+                                } else {
+                                    IconButton(onClick = { systemFilesSearching = true }) {
+                                        Icon(Icons.Outlined.Search, tr("Tìm kiếm"))
+                                    }
+                                    IconButton(onClick = { systemFilesRevision++ }) {
+                                        Icon(Icons.Outlined.Refresh, tr("Làm mới"))
+                                    }
                                 }
                             },
                             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -485,19 +521,30 @@ internal fun App(
                                 rootPath = systemFilesRoot,
                                 directory = systemFilesDirectory,
                                 revision = systemFilesRevision,
+                                query = systemFilesQuery,
                                 showHiddenFiles = showHiddenSystemFiles,
-                                onDirectoryChange = { systemFilesDirectory = it },
+                                onDirectoryChange = {
+                                    systemFilesQuery = ""
+                                    systemFilesSearching = false
+                                    systemFilesDirectory = it
+                                },
                                 onRootChange = { root ->
+                                    systemFilesQuery = ""
+                                    systemFilesSearching = false
                                     systemFilesRoot = root
                                     systemFilesDirectory = root
                                     systemFilesRevision++
                                 },
                                 onRefresh = { systemFilesRevision++ },
-                                onExit = { showSystemFiles = false },
+                                onExit = {
+                                    systemFilesQuery = ""
+                                    systemFilesSearching = false
+                                    showSystemFiles = false
+                                },
                                 openFile = openLocalFile,
                                 uploadLocal = uploadLocalFile,
                                 cloudDestination = active?.let { it.title + " / " + model.path.joinToString(" / ") { folder -> folder.name } },
-                                handleBack = !viewerExpanded && !drawerState.isOpen && !showAccounts && !showTypes && !addingS3
+                                handleBack = !viewerExpanded && !systemFilesSearching && !drawerState.isOpen && !showAccounts && !showTypes && !addingS3
                             )
                         }
                         active == null -> FileBrowserPage(

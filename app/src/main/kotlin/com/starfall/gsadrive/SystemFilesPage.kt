@@ -43,6 +43,7 @@ internal fun SystemFilesPage(
     padding: PaddingValues,
     rootPath: String,
     directory: String,
+    query: String,
     revision: Int,
     showHiddenFiles: Boolean,
     onDirectoryChange: (String) -> Unit,
@@ -59,7 +60,6 @@ internal fun SystemFilesPage(
     val storageLocations = remember(context, revision) { systemStorageLocations(context) }
     var storageMenu by remember { mutableStateOf(false) }
     var actionFile by remember { mutableStateOf<DriveFile?>(null) }
-    var query by rememberSaveable { mutableStateOf("") }
     var legacyRequested by rememberSaveable { mutableStateOf(false) }
     var requested by rememberSaveable { mutableStateOf(false) }
     var permissionError by remember { mutableStateOf<String?>(null) }
@@ -149,7 +149,6 @@ internal fun SystemFilesPage(
             requestAccess()
         }
     }
-    LaunchedEffect(directory) { query = "" }
 
     var model by remember { mutableStateOf(Model(loading = true)) }
     LaunchedEffect(directory, revision, allowed, showHiddenFiles, rootPath) {
@@ -213,13 +212,6 @@ internal fun SystemFilesPage(
                 FilledTonalButton(onClick = ::requestAccess) { Text(tr("Cấp quyền truy cập")) }
             }
         } else {
-            OutlinedTextField(
-                query,
-                { query = it },
-                singleLine = true,
-                placeholder = { Text(tr("Tìm trong thư mục")) },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)
-            )
             if (model.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
             FileBrowserPage(
                 model,
