@@ -24,6 +24,10 @@ workflows:
     max_build_duration: 60
     environment:
       java: 17
+      groups:
+        - github_release
+      vars:
+        GITHUB_RELEASE_REPO: starfall-org/manydrive
       android_signing:
         # Must match the Reference name in Codemagic's Android keystores tab.
         - ManyDrive
@@ -39,10 +43,20 @@ workflows:
           : "${CM_KEY_ALIAS:?Missing key alias}"
           : "${CM_KEY_PASSWORD:?Missing key password}"
           test -f "$CM_KEYSTORE_PATH"
+      - name: Prepare GitHub release publishing
+        script: |
+          set -eu
+          : "${GH_TOKEN:?Set secret GH_TOKEN in environment group github_release}"
+          if ! command -v gh >/dev/null 2>&1; then
+            brew install gh --quiet
+          fi
       - name: Build ABI-specific release APKs and AAB
         script: |
           chmod +x gradlew
           ./gradlew :app:assembleRelease :app:bundleRelease --no-daemon --stacktrace
+      - name: Publish APKs and AAB to GitHub Release
+        script: |
+          bash scripts/publish-github-release.sh
     artifacts:
       - app/build/outputs/apk/release/*.apk
       - app/build/outputs/bundle/release/*.aab

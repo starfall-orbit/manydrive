@@ -22,8 +22,13 @@ The project has no Flutter or Dart runtime. It uses a Kotlin/Jetpack Compose Mat
 
 1. Open **Team settings → codemagic.yaml settings → Code signing identities → Android keystores**.
 2. Upload your release keystore and enter its keystore password, key alias, and key password.
-3. Set its **Reference name** to `manydrive_release`, matching `environment.android_signing` in `codemagic.yaml`. If you already uploaded it with another reference name, update the YAML to match.
-4. Run the `android-release` workflow to produce signed APK and AAB artifacts.
+3. Set its **Reference name** to `ManyDrive`, matching `environment.android_signing` in `codemagic.yaml`. If you already uploaded it with another reference name, update the YAML to match.
+4. Create a Codemagic environment variable group named `github_release`. Add `GH_TOKEN` as a **Secret**: a GitHub fine-grained personal access token with access to `starfall-org/manydrive` and **Contents: Read and write** (approve it for the organization if required).
+5. Run the `android-release` workflow. After the signed APKs and AAB build successfully, it publishes them to GitHub Release `v<versionName>` (for example, `v3.0.0`).
+
+The publishing script reads the version from the APK output metadata and targets the exact build commit. New releases stay drafts until all APKs and the AAB upload successfully. A rerun for the same tag and commit replaces matching assets; reusing a version for a different commit fails instead of publishing mismatched binaries. If building a tag, it must match `v<versionName>`. Debug builds do not publish releases or require `GH_TOKEN`.
+
+See the [GitHub CLI release documentation](https://cli.github.com/manual/gh_release_create) and [Codemagic environment variables](https://docs.codemagic.io/yaml-basic-configuration/configuring-environment-variables/).
 
 Codemagic supplies `CM_KEYSTORE_PATH`, `CM_KEYSTORE_PASSWORD`, `CM_KEY_ALIAS`, and `CM_KEY_PASSWORD` to Gradle. Release signing requires these variables; it no longer uses the debug keystore. For local release builds, provide the same environment variables. Debug builds do not require them.
 
