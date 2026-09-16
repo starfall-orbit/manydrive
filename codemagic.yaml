@@ -46,7 +46,8 @@ workflows:
       - name: Prepare GitHub release publishing
         script: |
           set -eu
-          : "${GH_TOKEN:?Set secret GH_TOKEN in environment group github_release}"
+          GITHUB_RELEASE_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+          : "${GITHUB_RELEASE_TOKEN:?Set secret GITHUB_TOKEN (or GH_TOKEN) in environment group github_release}"
           if ! command -v gh >/dev/null 2>&1; then
             brew install gh --quiet
           fi
