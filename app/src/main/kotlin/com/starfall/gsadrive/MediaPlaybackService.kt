@@ -15,9 +15,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.BitmapLoader
-import androidx.media3.datasource.BaseDataSource
-import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -45,14 +44,13 @@ import com.starfall.gsadrive.data.S3Api
 import com.starfall.gsadrive.data.S3Config
 import java.io.File
 import java.io.IOException
-import java.io.RandomAccessFile
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Callable
 import java.util.concurrent.Executors
 import kotlinx.coroutines.runBlocking
 
-/** Information needed to lazily materialize one media item into the viewer cache. */
+/** Information needed to open a cloud media item lazily. */
 data class PlaybackSource(
     val mediaId: String,
     val file: DriveFile,
@@ -81,7 +79,7 @@ data class PlaybackSource(
 
 /**
  * In-process registry used by the playback service. Media items are added to the ExoPlayer playlist
- * immediately, but the backing cloud object is only downloaded when ExoPlayer actually opens it.
+ * immediately; S3 opens through a fresh presigned URL, while Drive uses the local viewer cache.
  */
 object PlaybackSourceRegistry {
     private val sources = ConcurrentHashMap<String, PlaybackSource>()
@@ -110,6 +108,8 @@ object PlaybackSourceRegistry {
     @Throws(IOException::class)
     fun resolve(mediaId: String): File {
         val source = sources[mediaId] ?: throw IOException(tr("Không tìm thấy nguồn media: $mediaId"))
+        if (source.accountType == "LOCAL") return source.cacheFile
+        if (source.accountType == "S3") throw IOException("S3 media must use presigned streaming")
         if (source.cacheFile.isFile && source.cacheFile.length() > 0L) return source.cacheFile
 
         val lock = locks.getOrPut(mediaId) { Any() }
@@ -121,13 +121,6 @@ object PlaybackSourceRegistry {
             temporary.delete()
             try {
                 when (source.accountType) {
-                    "S3" -> runBlocking {
-                        S3Api.downloadTo(
-                            source.s3Config ?: throw IOException(tr("Thiếu cấu hình S3 cho media.")),
-                            source.file.id,
-                            temporary
-                        )
-                    }
                     "GOOGLE", "SERVICE" -> DriveApi.downloadTo(
                         source.accessToken ?: throw IOException(tr("Thiếu quyền truy cập media.")),
                         source.file.id,
@@ -149,69 +142,36 @@ object PlaybackSourceRegistry {
     }
 }
 
-/** DataSource that lazily downloads a ManyDrive media item, then exposes it as a seekable file. */
+/** Resolve on every open/reopen so seeking never reuses an expired S3 URL. */
 @OptIn(UnstableApi::class)
-private class ManyDriveMediaDataSource : BaseDataSource(false) {
-    private var opened = false
-    private var currentUri: Uri? = null
-    private var file: RandomAccessFile? = null
-    private var bytesRemaining = 0L
-
-    override fun open(dataSpec: DataSpec): Long {
-        transferInitializing(dataSpec)
-        currentUri = dataSpec.uri
-        val mediaId = dataSpec.uri.getQueryParameter("id")
-            ?: throw IOException(tr("Media URI không hợp lệ."))
-        val resolved = PlaybackSourceRegistry.resolve(mediaId)
-        val handle = RandomAccessFile(resolved, "r")
-        if (dataSpec.position > handle.length()) {
-            handle.close()
-            throw IOException(tr("Vị trí đọc media vượt quá kích thước tệp."))
+internal fun resolvePlaybackDataSpec(dataSpec: DataSpec): DataSpec {
+    if (dataSpec.uri.scheme != "manydrive") return dataSpec
+    val mediaId = dataSpec.uri.getQueryParameter("id")
+        ?: throw IOException(tr("Media URI không hợp lệ."))
+    val source = PlaybackSourceRegistry.get(mediaId)
+        ?: throw IOException(tr("Không tìm thấy nguồn media: $mediaId"))
+    if (source.accountType == "S3") {
+        val remote = try {
+            runBlocking {
+                S3Api.downloadSource(
+                    source.s3Config ?: throw IOException(tr("Thiếu cấu hình S3 cho media.")),
+                    source.file.id
+                )
+            }
+        } catch (error: Exception) {
+            if (error is IOException) throw error
+            throw IOException(tr("Không thể mở luồng media S3."), error)
         }
-        handle.seek(dataSpec.position)
-        file = handle
-        bytesRemaining = if (dataSpec.length == C.LENGTH_UNSET.toLong()) {
-            handle.length() - dataSpec.position
-        } else {
-            minOf(dataSpec.length, handle.length() - dataSpec.position)
-        }
-        opened = true
-        transferStarted(dataSpec)
-        return bytesRemaining
+        // Preserve position and length: Media3 turns them into HTTP Range requests.
+        return dataSpec.withUri(Uri.parse(remote.url)).withAdditionalHeaders(remote.headers)
     }
-
-    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-        if (length == 0) return 0
-        if (bytesRemaining == 0L) return C.RESULT_END_OF_INPUT
-        val read = file?.read(buffer, offset, minOf(length.toLong(), bytesRemaining).toInt())
-            ?: return C.RESULT_END_OF_INPUT
-        if (read < 0) return C.RESULT_END_OF_INPUT
-        bytesRemaining -= read
-        bytesTransferred(read)
-        return read
-    }
-
-    override fun getUri(): Uri? = currentUri
-
-    override fun close() {
-        currentUri = null
-        runCatching { file?.close() }
-        file = null
-        if (opened) {
-            opened = false
-            transferEnded()
-        }
-    }
-
-    class Factory : DataSource.Factory {
-        override fun createDataSource(): DataSource = ManyDriveMediaDataSource()
-    }
+    return dataSpec.withUri(Uri.fromFile(PlaybackSourceRegistry.resolve(mediaId)))
 }
 
 /** A page starts paused and muted; the session activates this same player when selected. */
 @OptIn(UnstableApi::class)
 internal fun createMediaPagePlayer(context: android.content.Context): ExoPlayer = ExoPlayer.Builder(context)
-    .setMediaSourceFactory(DefaultMediaSourceFactory(DefaultDataSource.Factory(context, ManyDriveMediaDataSource.Factory())))
+    .setMediaSourceFactory(DefaultMediaSourceFactory(ResolvingDataSource.Factory(DefaultDataSource.Factory(context), ::resolvePlaybackDataSpec)))
     .setSeekBackIncrementMs(10_000L)
     .setSeekForwardIncrementMs(10_000L)
     .setLoadControl(androidx.media3.exoplayer.DefaultLoadControl.Builder()

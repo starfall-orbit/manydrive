@@ -66,8 +66,8 @@ internal fun MultiFileActionsSheet(
                         onActionDone()
                     }
                 }
-                if (driveActions && actions.trashMany != null) {
-                    ActionRow(Icons.Outlined.Delete, tr("Chuyển vào thùng rác")) {
+                if (actions.trashMany != null) {
+                    ActionRow(Icons.Outlined.Delete, tr(if (driveActions) "Chuyển vào thùng rác" else "Xóa")) {
                         actions.trashMany.invoke(files)
                         onActionDone()
                     }
@@ -209,8 +209,8 @@ private fun MainActions(
         }
     }
     ActionRow(Icons.Outlined.Info, tr("Xem thông tin"), onInfo)
-    if (driveActions && actions.trash != null) {
-        ActionRow(Icons.Outlined.Delete, tr("Chuyển vào thùng rác")) {
+    if (actions.trash != null) {
+        ActionRow(Icons.Outlined.Delete, tr(if (driveActions) "Chuyển vào thùng rác" else "Xóa")) {
             actions.trash.invoke(file)
             onDismiss()
         }

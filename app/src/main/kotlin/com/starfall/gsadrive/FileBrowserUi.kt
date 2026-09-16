@@ -50,7 +50,9 @@ internal fun DriveNavigationDrawer(
     settingsSelected: Boolean,
     onAccounts: () -> Unit,
     onTrash: () -> Unit,
-    onSettings: () -> Unit
+    onSettings: () -> Unit,
+    systemFilesSelected: Boolean = false,
+    onSystemFiles: () -> Unit = {}
 ) {
     val screenWidth = LocalConfiguration.current.screenWidthDp.dp
     val drawerWidth = (screenWidth - 56.dp).coerceAtLeast(240.dp).coerceAtMost(360.dp)
@@ -85,6 +87,12 @@ internal fun DriveNavigationDrawer(
                 icon = Icons.Outlined.AccountCircle,
                 label = tr("Tài khoản"),
                 onClick = onAccounts
+            )
+            DriveDrawerItem(
+                icon = Icons.Outlined.Storage,
+                label = tr("Tệp Hệ Thống"),
+                selected = systemFilesSelected,
+                onClick = onSystemFiles
             )
             DriveDrawerItem(
                 icon = Icons.Outlined.Delete,
@@ -290,7 +298,7 @@ private fun rememberRemoteAvatar(url: String?): androidx.compose.ui.graphics.Ima
 internal fun FileBrowserPage(
     model: Model,
     padding: PaddingValues,
-    account: AccountEntry,
+    account: AccountEntry?,
     shared: Boolean,
     query: String,
     searchResults: List<DriveFile>? = null,
@@ -299,9 +307,12 @@ internal fun FileBrowserPage(
     authorize: () -> Unit,
     openFolder: (DriveFile) -> Unit,
     openFile: (DriveFile, List<DriveFile>) -> Unit,
-    actions: FileActionCallbacks = FileActionCallbacks()
+    actions: FileActionCallbacks = FileActionCallbacks(),
+    browserKey: String = account?.key ?: "empty",
+    showEmptyMessage: Boolean = account != null,
+    localMenu: ((DriveFile) -> Unit)? = null
 ) {
-    val scopeKey = "${account.key}:${if (shared) 1 else 0}:${model.path.lastOrNull()?.id.orEmpty()}"
+    val scopeKey = "${browserKey}:${if (shared) 1 else 0}:${model.path.lastOrNull()?.id.orEmpty()}"
     val defaultSort = when {
         shared -> BrowserSort.SHARED
         model.path.isNotEmpty() -> BrowserSort.MODIFIED
@@ -321,7 +332,7 @@ internal fun FileBrowserPage(
             else defaultSort == BrowserSort.NAME
         )
     }
-    var grid by rememberSaveable(account.key) { mutableStateOf(false) }
+    var grid by rememberSaveable(browserKey) { mutableStateOf(false) }
     var sortMenu by remember { mutableStateOf(false) }
     var actionFile by remember { mutableStateOf<DriveFile?>(null) }
     var selectedIds by remember(scopeKey) { mutableStateOf<List<String>>(emptyList()) }
@@ -348,9 +359,12 @@ internal fun FileBrowserPage(
             else selectedIds + file.id
     }
     fun enterSelection(file: DriveFile) {
+        if (account == null) return
         if (file.id !in selectedSet) selectedIds = selectedIds + file.id
     }
     fun showMenu(file: DriveFile) {
+        if (localMenu != null) { localMenu(file); return }
+        if (account == null) return
         if (file.id in selectedSet) multiActionFiles = selectedFiles
         else actionFile = file
     }
@@ -471,13 +485,13 @@ internal fun FileBrowserPage(
         if (searchLoading) {
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp))
         }
-        if (account.type == AccountType.GOOGLE && model.token == null && model.files.isEmpty()) {
+        if (account?.type == AccountType.GOOGLE && model.token == null && model.files.isEmpty()) {
             FilledTonalButton(onClick = authorize, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
                 Text(tr("Cho phép Drive"))
             }
         }
 
-        if (!model.loading && !searchLoading && model.message == null && searchError == null && visible.isEmpty()) {
+        if (showEmptyMessage && !model.loading && !searchLoading && model.message == null && searchError == null && visible.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(if (query.isBlank()) tr("Không có tệp trong vị trí này.") else tr("Không tìm thấy tệp phù hợp."),
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -501,7 +515,7 @@ internal fun FileBrowserPage(
                         selected = file.id in selectedSet,
                         onToggleSelection = ::toggleSelection,
                         onLongSelect = ::enterSelection,
-                        onMenu = ::showMenu
+                        onMenu = if (account != null || localMenu != null) ::showMenu else null
                     )
                 }
             }
@@ -525,7 +539,7 @@ internal fun FileBrowserPage(
                             selected = file.id in selectedSet,
                             onToggleSelection = ::toggleSelection,
                             onLongSelect = ::enterSelection,
-                            onMenu = ::showMenu
+                            onMenu = if (account != null || localMenu != null) ::showMenu else null
                         )
                     }
                 }
@@ -543,19 +557,19 @@ internal fun FileBrowserPage(
                         selected = file.id in selectedSet,
                         onToggleSelection = ::toggleSelection,
                         onLongSelect = ::enterSelection,
-                        onMenu = ::showMenu
+                        onMenu = if (account != null || localMenu != null) ::showMenu else null
                     )
                 }
             }
         }
     }
-    actionFile?.let { selected ->
-        FileActionsSheet(file = selected, account = account, actions = actions, onDismiss = { actionFile = null })
+    actionFile?.takeIf { account != null }?.let { selected ->
+        FileActionsSheet(file = selected, account = requireNotNull(account), actions = actions, onDismiss = { actionFile = null })
     }
-    multiActionFiles?.takeIf { it.isNotEmpty() }?.let { selected ->
+    multiActionFiles?.takeIf { it.isNotEmpty() && account != null }?.let { selected ->
         MultiFileActionsSheet(
             files = selected,
-            account = account,
+            account = requireNotNull(account),
             actions = actions,
             onDismiss = { multiActionFiles = null },
             onActionDone = {
@@ -576,7 +590,7 @@ private fun FileListRow(
     selected: Boolean,
     onToggleSelection: (DriveFile) -> Unit,
     onLongSelect: (DriveFile) -> Unit,
-    onMenu: (DriveFile) -> Unit
+    onMenu: ((DriveFile) -> Unit)?
 ) {
     Surface(
         color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
@@ -630,7 +644,7 @@ private fun FileListRow(
                     )
                 }
             }
-            IconButton(onClick = { onMenu(file) }) { Icon(Icons.Outlined.MoreVert, tr("Tùy chọn")) }
+            if (onMenu != null) IconButton(onClick = { onMenu(file) }) { Icon(Icons.Outlined.MoreVert, tr("Tùy chọn")) }
         }
     }
 }
@@ -663,7 +677,7 @@ private fun FileGridCard(
     selected: Boolean,
     onToggleSelection: (DriveFile) -> Unit,
     onLongSelect: (DriveFile) -> Unit,
-    onMenu: (DriveFile) -> Unit
+    onMenu: ((DriveFile) -> Unit)?
 ) {
     val thumbnail = rememberFileThumbnail(file, accessToken)
     Surface(
@@ -697,7 +711,7 @@ private fun FileGridCard(
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                IconButton(onClick = { onMenu(file) }) { Icon(Icons.Outlined.MoreVert, tr("Tùy chọn")) }
+                if (onMenu != null) IconButton(onClick = { onMenu(file) }) { Icon(Icons.Outlined.MoreVert, tr("Tùy chọn")) }
             }
             if (thumbnail != null && !file.isFolder) {
                 Box(

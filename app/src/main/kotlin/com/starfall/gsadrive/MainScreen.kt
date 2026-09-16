@@ -93,12 +93,16 @@ internal fun App(
     playback: Player? = null,
     minimizeViewer: () -> Unit = {},
     expandViewer: () -> Unit = {},
-    browserModels: Map<Int, Model> = emptyMap()
+    browserModels: Map<Int, Model> = emptyMap(),
+    openLocalFile: (DriveFile, List<DriveFile>) -> Unit = { _, _ -> },
+    uploadLocalFile: (DriveFile, (Result<Unit>) -> Unit) -> Unit = { _, done -> done(Result.failure(IllegalStateException("No cloud account"))) }
 ) {
     var showAccounts by remember { mutableStateOf(false) }
     var showTypes by remember { mutableStateOf(false) }
     var addingS3 by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf<AccountEntry?>(null) }
+    val systemFilesState = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    var showSystemFiles by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showFabMenu by remember { mutableStateOf(false) }
     var showCreateFolderDialog by remember { mutableStateOf(false) }
@@ -171,6 +175,7 @@ internal fun App(
     fun requestBrowserTab(index: Int) {
         if (index !in tabs.indices || !isTabEnabled(active?.type, index)) return
         showSettings = false
+        showSystemFiles = false
         if (selected in tabs.indices) {
             drawerScope.launch { tabPagerState.animateScrollToPage(index) }
         } else {
@@ -209,10 +214,10 @@ internal fun App(
     BackHandler(enabled = !viewerExpanded && drawerState.isOpen && !showFabMenu) { drawerScope.launch { drawerState.close() } }
     BackHandler(enabled = !appViewerExpanded && showSettings && !drawerState.isOpen) { showSettings = false }
     BackHandler(
-        enabled = !viewerExpanded && selected == 3 && !showFabMenu && !drawerState.isOpen && !showSettings &&
+        enabled = !viewerExpanded && selected == 3 && !showFabMenu && !drawerState.isOpen && !showSettings && !showSystemFiles &&
             !showAccounts && !showTypes && !addingS3
     ) { select(0) }
-    BackHandler(enabled = !viewerExpanded && model.path.isNotEmpty() && !showSettings && !showAccounts && !showTypes && !addingS3 && !drawerState.isOpen) {
+    BackHandler(enabled = !viewerExpanded && model.path.isNotEmpty() && !showSettings && !showSystemFiles && !showAccounts && !showTypes && !addingS3 && !drawerState.isOpen) {
         if (selected in tabs.indices) tabSearchStates[selected] = BrowserTabSearchState()
         goUp()
     }
@@ -224,8 +229,15 @@ internal fun App(
         drawerContent = {
             DriveNavigationDrawer(
                 account = active,
-                trashSelected = !showSettings && selected == 3,
+                trashSelected = !showSettings && !showSystemFiles && selected == 3,
                 settingsSelected = showSettings,
+                systemFilesSelected = showSystemFiles && !showSettings,
+                onSystemFiles = {
+                    showSystemFiles = true
+                    showSettings = false
+                    showFabMenu = false
+                    drawerScope.launch { drawerState.close() }
+                },
                 onAccounts = {
                     drawerScope.launch { drawerState.close() }
                     showAccounts = true
@@ -233,6 +245,7 @@ internal fun App(
                 onTrash = {
                     if (isTabEnabled(active?.type, 3)) {
                         showSettings = false
+                        showSystemFiles = false
                         drawerScope.launch { drawerState.close() }
                         select(3)
                     }
@@ -251,7 +264,7 @@ internal fun App(
                 containerColor = if (appViewerExpanded && viewerBlack) androidx.compose.ui.graphics.Color.Black else MaterialTheme.colorScheme.background,
                 topBar = {
                     when {
-                        !appViewerExpanded && !showSettings && selected in 0..1 && active != null && model.path.isEmpty() ->
+                        !appViewerExpanded && !showSettings && !showSystemFiles && selected in 0..1 && (active == null || model.path.isEmpty()) ->
                             DriveRootTopBar(
                                 query = searchQuery,
                                 onQueryChange = { value ->
@@ -261,7 +274,7 @@ internal fun App(
                                 onAccounts = openAccounts,
                                 account = active
                             )
-                        !appViewerExpanded && !showSettings && selected in 0..1 && active != null && model.path.isNotEmpty() ->
+                        !appViewerExpanded && !showSettings && !showSystemFiles && selected in 0..1 && active != null && model.path.isNotEmpty() ->
                             FolderBrowserTopBar(
                                 title = model.path.last().name,
                                 query = searchQuery,
@@ -294,6 +307,7 @@ internal fun App(
                             title = {
                                 Text(when {
                                     appViewerExpanded -> viewer?.file?.name.orEmpty()
+                                    showSystemFiles -> tr("Tệp Hệ Thống")
                                     selected == 3 -> tr("Thùng rác")
                                     else -> "ManyDrive"
                                 }, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -312,7 +326,7 @@ internal fun App(
                                 }
                             },
                             actions = {
-                                if (!appViewerExpanded && !showSettings && active != null)
+                                if (!appViewerExpanded && !showSettings && !showSystemFiles && active != null)
                                     AccountAvatar(active, openAccounts)
                             },
                             colors = TopAppBarDefaults.topAppBarColors(
@@ -338,7 +352,7 @@ internal fun App(
                         if (!showSettings) NavigationBar {
                             tabs.forEachIndexed { index, item ->
                                 NavigationBarItem(
-                                    selected = selected in tabs.indices && index == tabPagerState.currentPage,
+                                    selected = !showSystemFiles && selected in tabs.indices && index == tabPagerState.currentPage,
                                     onClick = { requestBrowserTab(index) },
                                     enabled = isTabEnabled(active?.type, index),
                                     icon = { Icon(item.icon, item.label) }, label = { Text(item.label) })
@@ -347,7 +361,7 @@ internal fun App(
                     }
                 },
                 floatingActionButton = {
-                    if (!appViewerExpanded && !showSettings) {
+                    if (!appViewerExpanded && !showSettings && !showSystemFiles) {
                         Column(
                             horizontalAlignment = Alignment.End,
                             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -386,7 +400,7 @@ internal fun App(
                                 )
                             }
                             FloatingActionButton(
-                                onClick = { showFabMenu = !showFabMenu },
+                                onClick = { if (active == null) showTypes = true else showFabMenu = !showFabMenu },
                                 containerColor = if (showFabMenu) MaterialTheme.colorScheme.inverseSurface
                                     else MaterialTheme.colorScheme.primaryContainer,
                                 contentColor = if (showFabMenu) MaterialTheme.colorScheme.inverseOnSurface
@@ -422,7 +436,19 @@ internal fun App(
                             onSaveText = saveViewerText
                         )
                         showSettings -> SettingsPage(padding, themeMode, superDark, setThemeMode, setSuperDark, clearCache)
-                        active == null -> StoragePage(model, padding, null, { showTypes = true }, openAccounts, signOut, openFile = { file -> openFile(file, listOf(file)) })
+                        showSystemFiles -> systemFilesState.SaveableStateProvider("system-files") {
+                            SystemFilesPage(
+                                padding = padding, onExit = { showSystemFiles = false },
+                                openFile = openLocalFile,
+                                uploadLocal = uploadLocalFile,
+                                cloudDestination = active?.let { it.title + " / " + model.path.joinToString(" / ") { folder -> folder.name } },
+                                handleBack = !viewerExpanded && !drawerState.isOpen && !showAccounts && !showTypes && !addingS3
+                            )
+                        }
+                        active == null -> FileBrowserPage(
+                            model = Model(), padding = padding, account = null, shared = false,
+                            query = searchQuery, authorize = {}, openFolder = {}, openFile = { _, _ -> }
+                        )
                         selected == 3 -> PullToRefreshBox(
                             isRefreshing = model.loading,
                             onRefresh = { if (!model.loading && !accounts.busy) reload() },
@@ -433,7 +459,7 @@ internal fun App(
                         else -> HorizontalPager(
                             state = tabPagerState,
                             modifier = Modifier.fillMaxSize().padding(padding),
-                            userScrollEnabled = !appViewerExpanded && !showSettings && !accounts.busy &&
+                            userScrollEnabled = !appViewerExpanded && !showSettings && !showSystemFiles && !accounts.busy &&
                                 !showFabMenu && !showAccounts && !showTypes && !addingS3 && !showCreateFolderDialog &&
                                 isTabEnabled(active.type, 1),
                             beyondViewportPageCount = 1,
@@ -475,8 +501,8 @@ internal fun App(
                                         },
                                         openFile = { file, queue -> if (page == selected) openFile(file, queue) },
                                         actions = fileActions.copy(
-                                            trash = if (active.type != AccountType.S3 && page == 0) fileActions.trash else null,
-                                            trashMany = if (active.type != AccountType.S3 && page == 0) fileActions.trashMany else null
+                                            trash = if (page == 0) fileActions.trash else null,
+                                            trashMany = if (page == 0) fileActions.trashMany else null
                                         )
                                     )
                                 }
@@ -563,6 +589,7 @@ internal fun App(
         onDismiss = { showAccounts = false },
         onSelect = { entry ->
             showAccounts = false
+            showSystemFiles = false
             selectAccount(entry)
         },
         onRemove = { entry -> removing = entry },
@@ -575,10 +602,16 @@ internal fun App(
         onDismissRequest = { showTypes = false },
         title = { Text(tr("Thêm tài khoản")) },
         text = {
-            Column(Modifier.fillMaxWidth()) {
-                TextButton(onClick = { showTypes = false; showAccounts = true; signIn() }) { Text(tr("Google · Tài khoản trên thiết bị")) }
-                TextButton(onClick = { showTypes = false; addingS3 = true }) { Text(tr("S3 · Nhập thông tin kết nối")) }
-                TextButton(onClick = { showTypes = false; showAccounts = true; importService() }) { Text(tr("Service Account · Nhập file JSON")) }
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                AccountTypeButton(Icons.Outlined.AccountCircle, "Google", tr("Tài khoản trên thiết bị")) {
+                    showTypes = false; showAccounts = true; signIn()
+                }
+                AccountTypeButton(Icons.Outlined.Cloud, "S3", tr("Nhập thông tin kết nối")) {
+                    showTypes = false; addingS3 = true
+                }
+                AccountTypeButton(Icons.Outlined.Key, "Service Account", tr("Nhập file JSON")) {
+                    showTypes = false; showAccounts = true; importService()
+                }
             }
         },
         confirmButton = { TextButton(onClick = { showTypes = false }) { Text(tr("Hủy")) } }
@@ -590,6 +623,35 @@ internal fun App(
             text = { Text(tr("Tài khoản sẽ được gỡ khỏi danh sách đã lưu trong ứng dụng. Tệp trên đám mây vẫn được giữ nguyên.")) },
             confirmButton = { TextButton(onClick = { removeAccount(entry); removing = null }) { Text(tr("Đăng xuất")) } },
             dismissButton = { TextButton(onClick = { removing = null }) { Text(tr("Hủy")) } })
+    }
+}
+
+@Composable
+private fun AccountTypeButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        onClick = onClick, modifier = Modifier.fillMaxWidth(),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.primaryContainer) {
+                Icon(icon, null, modifier = Modifier.padding(12.dp).size(24.dp),
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -899,7 +961,12 @@ private fun ServiceAccountPagePreview() {
 @ScreenPreviews
 @Composable
 private fun AccountsEmptyPreview() {
-    PreviewSurface { StoragePage(Model(), PaddingValues(0.dp), null, {}, {}, {}) }
+    PreviewSurface {
+        Column {
+            DriveRootTopBar("", {}, {}, {}, null)
+            FileBrowserPage(Model(), PaddingValues(0.dp), null, false, "", authorize = {}, openFolder = {}, openFile = { _, _ -> })
+        }
+    }
 }
 
 @ComponentPreviews
@@ -924,4 +991,16 @@ private fun LoadingPreview() {
 @Composable
 private fun S3AddAccountPreview() {
     PreviewSurface { S3AccountDialog(onDismiss = {}, connect = { _, _ -> }) }
+}
+
+@Preview(showBackground = true, widthDp = 360)
+@Composable
+private fun AccountTypeButtonsPreview() {
+    PreviewSurface {
+        Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            AccountTypeButton(Icons.Outlined.AccountCircle, "Google", tr("Tài khoản trên thiết bị")) {}
+            AccountTypeButton(Icons.Outlined.Cloud, "S3", tr("Nhập thông tin kết nối")) {}
+            AccountTypeButton(Icons.Outlined.Key, "Service Account", tr("Nhập file JSON")) {}
+        }
+    }
 }

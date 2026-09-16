@@ -13,6 +13,28 @@ fun tr(vietnamese: String): String = AppLanguage.translate(vietnamese, Locale.ge
 
 internal object AppLanguage {
     private val english = mapOf(
+        "Mở bằng ứng dụng khác" to "Open with another app",
+        "Sao chép" to "Copy",
+        "Sao chép vào đây" to "Copy here",
+        "Xóa thư mục và toàn bộ nội dung bên trong?" to "Delete this folder and all its contents?",
+        "Xóa tệp này?" to "Delete this file?",
+        "Tải lên tài khoản cloud" to "Upload to cloud account",
+        "Đường dẫn" to "Path",
+        "Không thể hoàn tất tải lên." to "Could not finish uploading.",
+        "Tệp Hệ Thống" to "System Files",
+        "Tài khoản trên thiết bị" to "Account on this device",
+        "Nhập thông tin kết nối" to "Enter connection details",
+        "Nhập file JSON" to "Import a JSON file",
+        "Không thể mở cài đặt quyền truy cập bộ nhớ." to "Could not open storage access settings.",
+        "Không thể đọc thư mục này. Kiểm tra quyền truy cập." to "Cannot read this folder. Check access permissions.",
+        "Cho phép truy cập bộ nhớ để duyệt tệp trên thiết bị." to "Allow storage access to browse files on this device.",
+        "Cấp quyền truy cập" to "Grant access",
+        "Tìm trong thư mục" to "Search this folder",
+        "Không thể đọc tệp này." to "Cannot read this file.",
+        "Không thể mở luồng media S3." to "Could not open the S3 media stream.",
+        "Xóa" to "Delete",
+        "Không thể xóa một số mục S3. Kiểm tra quyền xóa và thử lại." to
+            "Some S3 items could not be deleted. Check delete permissions and try again.",
         "Tài khoản" to "Accounts", "Đóng" to "Close", "Chưa có tài khoản." to "No accounts yet.",
         "Thêm tài khoản khác" to "Add another account", "Cài đặt" to "Settings", "Quay lại" to "Back",
         "Tệp" to "Files", "Chia sẻ" to "Shared", "Thùng rác" to "Trash", "Mở menu" to "Open menu",

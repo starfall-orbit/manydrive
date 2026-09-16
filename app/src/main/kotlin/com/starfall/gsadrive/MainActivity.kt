@@ -20,6 +20,7 @@ import com.starfall.gsadrive.ui.FileViewerPage
 import com.starfall.gsadrive.ui.MediaMiniPlayer
 import com.starfall.gsadrive.ui.SettingsPage
 import com.starfall.gsadrive.ui.theme.ThemeMode
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.CancellationException
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -435,7 +436,9 @@ class MainActivity : ComponentActivity() {
                         Toast.makeText(this@MainActivity, tr("Đã xóa cache danh sách tệp"), Toast.LENGTH_SHORT).show()
                     } },
                     viewer, { file, queue -> openPreview(file, swipeQueue = queue) }, ::closePreview, ::updatePreviewText, ::savePreviewText, ::swipePreview,
-                    playback, ::minimizePreview, ::expandPreview, browserModels = browserTabModels
+                    playback, ::minimizePreview, ::expandPreview, browserModels = browserTabModels,
+                    openLocalFile = { file, queue -> viewerCoordinator.openLocal(file, queue) },
+                    uploadLocalFile = ::uploadLocalFile
                 )
             }
         }
@@ -866,7 +869,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun loadS3(target: BrowserRefreshTarget? = null) {
+    private fun loadS3(target: BrowserRefreshTarget? = null, completionMessage: String? = null) {
         val entry = accountUi.active ?: return
         val refreshTarget = target ?: newBrowserRefreshTarget(entry)
         val account = s3Accounts.accounts.find { it.id == entry.id } ?: return
@@ -875,7 +878,7 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             runCatching { withContext(Dispatchers.IO) { S3Api.list(account.config, prefix) } }
                 .onSuccess { files ->
-                    if (updateBrowserTab(refreshTarget) { it.copy(files = files, loading = false, fromCache = false) }) {
+                    if (updateBrowserTab(refreshTarget) { it.copy(files = files, loading = false, fromCache = false, message = completionMessage) }) {
                         cacheFiles(refreshTarget, files)
                     }
                 }
@@ -1066,6 +1069,67 @@ class MainActivity : ComponentActivity() {
                 downloadPermission.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
             }
         } else start()
+    }
+
+    private fun uploadLocalFile(file: DriveFile, done: (Result<Unit>) -> Unit) {
+        val account = accountUi.active
+        if (account == null) {
+            done(Result.failure(IllegalStateException(tr("Hãy thêm hoặc chọn một tài khoản trước khi tải lên."))))
+            return
+        }
+        val config = s3Accounts.accounts.firstOrNull { it.id == account.id }?.config
+        val service = serviceAccounts.firstOrNull { it.id == account.id }
+        val existingToken = model.token
+        val parent = model.path.lastOrNull()?.id
+        if (account.type == AccountType.GOOGLE && existingToken == null) {
+            authorize()
+            done(Result.failure(IllegalStateException(tr("Hãy cấp quyền Drive trước khi tải lên."))))
+            return
+        }
+        ensureNotificationPermission()
+        val notifications = UploadNotifications(this)
+        notifications.running(UploadNotifications.Kind.DRIVE, completed = 0, total = null)
+        lifecycleScope.launch {
+            var completed = 0
+            val result = runCatching {
+                withContext(Dispatchers.IO) {
+                    val access = com.starfall.gsadrive.data.LocalFileAccess(android.os.Environment.getExternalStorageDirectory())
+                    val source = access.checked(file.id)
+                    val files = access.tree(file.id)
+                    val token = if (account.type == AccountType.SERVICE)
+                        ServiceAccountApi.accessToken(requireNotNull(service)).value else existingToken
+                    val folders = mutableMapOf<String, String>()
+                    for (local in files) {
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        val destination = if (local == source) parent else folders.getValue(local.parentFile.path)
+                        if (local.isDirectory) {
+                            folders[local.path] = if (account.type == AccountType.S3) {
+                                val key = destination.orEmpty() + local.name + "/"
+                                S3Api.createFolder(requireNotNull(config), key)
+                                key
+                            } else DriveApi.createFolder(requireNotNull(token), local.name, destination)
+                        } else {
+                            notifications.running(UploadNotifications.Kind.DRIVE, currentName = local.name,
+                                completed = completed, total = null)
+                            val mime = android.webkit.MimeTypeMap.getSingleton()
+                                .getMimeTypeFromExtension(local.extension.lowercase()) ?: "application/octet-stream"
+                            if (account.type == AccountType.S3)
+                                S3Api.upload(requireNotNull(config), destination.orEmpty() + local.name, mime, local)
+                            else local.inputStream().use { DriveApi.upload(requireNotNull(token), local.name, mime, it, destination) }
+                            completed++
+                        }
+                    }
+                }
+            }
+            withContext(kotlinx.coroutines.NonCancellable) {
+                withContext(Dispatchers.IO) { listingCache.clear(account.key) }
+                notifications.finished(UploadNotifications.Kind.DRIVE,
+                    if (result.isSuccess) tr("Đã tải lên $completed tệp.") else tr("Không thể hoàn tất tải lên."),
+                    success = result.isSuccess)
+                done(result)
+                if (accountUi.active?.key == account.key) refresh(forceNetwork = true)
+            }
+        }
     }
 
     private fun pickUpload(folder: Boolean) {
@@ -1283,6 +1347,10 @@ class MainActivity : ComponentActivity() {
     private fun moveToTrash(file: DriveFile) = moveToTrash(listOf(file))
 
     private fun moveToTrash(files: List<DriveFile>) {
+        if (accountUi.active?.type == AccountType.S3) {
+            deleteS3Files(files)
+            return
+        }
         if (model.loading || accountUi.active?.type !in setOf(AccountType.GOOGLE, AccountType.SERVICE)) return
         val token = model.token ?: return
         val unique = files.distinctBy { it.id }
@@ -1304,6 +1372,38 @@ class MainActivity : ComponentActivity() {
                 } else {
                     refresh(forceNetwork = true)
                 }
+            }
+        }
+    }
+
+    private fun deleteS3Files(files: List<DriveFile>) {
+        if (model.loading) return
+        val account = accountUi.active?.takeIf { it.type == AccountType.S3 } ?: return
+        val config = s3Accounts.accounts.firstOrNull { it.id == account.id }?.config ?: return
+        val unique = files.distinctBy { it.id }
+        if (unique.isEmpty()) return
+        val request = ++generation
+        model = model.copy(loading = true, message = null)
+        lifecycleScope.launch {
+            val failures = withContext(Dispatchers.IO) {
+                var failed = 0
+                for (file in unique) {
+                    try {
+                        S3Api.delete(config, file)
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        failed++
+                    }
+                }
+                // Capture the source account: switching accounts must never invalidate another cache.
+                listingCache.clear(account.key)
+                failed
+            }
+            if (request == generation && accountUi.active?.key == account.key) {
+                // Refresh even after partial failure, since some objects may already be gone.
+                loadS3(completionMessage = if (failures == 0) null
+                    else tr("Không thể xóa một số mục S3. Kiểm tra quyền xóa và thử lại.") + " ($failures/${unique.size})")
             }
         }
     }

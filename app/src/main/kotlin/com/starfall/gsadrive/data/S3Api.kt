@@ -6,6 +6,10 @@ import aws.sdk.kotlin.runtime.auth.credentials.StaticCredentialsProvider
 import aws.sdk.kotlin.services.s3.presigners.presignGetObject
 import kotlin.time.Duration.Companion.hours
 import aws.sdk.kotlin.services.s3.S3Client
+import aws.sdk.kotlin.services.s3.model.Delete
+import aws.sdk.kotlin.services.s3.model.DeleteObjectRequest
+import aws.sdk.kotlin.services.s3.model.DeleteObjectsRequest
+import aws.sdk.kotlin.services.s3.model.ObjectIdentifier
 import aws.sdk.kotlin.services.s3.model.GetObjectRequest
 import aws.sdk.kotlin.services.s3.model.ListObjectsV2Request
 import aws.sdk.kotlin.services.s3.model.PutObjectRequest
@@ -32,6 +36,51 @@ object S3Api {
         credentialsProvider = StaticCredentialsProvider {
             accessKeyId = config.accessKey
             secretAccessKey = config.secretKey
+        }
+    }
+
+    suspend fun delete(config: S3Config, file: DriveFile) {
+        client(config).use { client ->
+            if (!file.isFolder) {
+                require(file.id.isNotEmpty()) { "An object key is required" }
+                client.deleteObject(DeleteObjectRequest {
+                    bucket = config.bucket
+                    key = file.id
+                })
+                return
+            }
+            deleteS3Folder(file.id,
+                listPage = { prefix, token ->
+                    val response = client.listObjectsV2(ListObjectsV2Request {
+                        bucket = config.bucket
+                        this.prefix = prefix
+                        continuationToken = token
+                        // No delimiter: include every descendant, not just immediate children.
+                        maxKeys = 1_000
+                    })
+                    S3DeletePage(
+                        keys = response.contents.orEmpty().map { requireNotNull(it.key) },
+                        nextToken = if (response.isTruncated == true)
+                            requireNotNull(response.nextContinuationToken) { "Missing S3 continuation token" }
+                        else null
+                    )
+                },
+                deleteKeys = { keys ->
+                    val response = client.deleteObjects(DeleteObjectsRequest {
+                        bucket = config.bucket
+                        delete = Delete {
+                            objects = keys.map { value -> ObjectIdentifier { key = value } }
+                            quiet = true
+                        }
+                    })
+                    // S3 can return HTTP 200 while individual deletions fail.
+                    check(response.errors.isNullOrEmpty()) {
+                        response.errors.orEmpty().take(3).joinToString("; ") {
+                            "${it.key}: ${it.code} ${it.message.orEmpty()}"
+                        }
+                    }
+                }
+            )
         }
     }
 

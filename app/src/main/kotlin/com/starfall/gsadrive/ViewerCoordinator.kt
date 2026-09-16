@@ -40,6 +40,7 @@ internal class ViewerCoordinator(
     var state by mutableStateOf<ViewerState?>(null)
         private set
 
+    private var localPreview = false
     private var generation = 0
     private var awaitingTokenFor: String? = null
     private var mediaPrefetchJob: Job? = null
@@ -61,6 +62,7 @@ internal class ViewerCoordinator(
 
     fun syncToMediaItem(mediaItem: MediaItem) {
         val source = PlaybackSourceRegistry.get(mediaItem.mediaId) ?: return
+        localPreview = source.accountType == "LOCAL"
         val previous = state
         val queue = previous?.swipeQueue?.takeIf { items -> items.any { it.id == source.file.id } }
             ?: currentFiles().filter(::isSwipePreview)
@@ -74,7 +76,7 @@ internal class ViewerCoordinator(
             swipeIndex = index,
             previewPaths = previous?.previewPaths.orEmpty()
         )
-        activeAccount()?.let { prefetchAdjacentImages(it, queue, index) }
+        if (!localPreview) activeAccount()?.let { prefetchAdjacentImages(it, queue, index) }
         prefetchNextMedia(source.mediaId)
     }
 
@@ -86,6 +88,7 @@ internal class ViewerCoordinator(
             return
         }
         val account = activeAccount() ?: return
+        localPreview = false
         awaitingTokenFor = null
         val request = ++generation
         val browsingQueue = if (isSwipePreview(file)) {
@@ -159,6 +162,81 @@ internal class ViewerCoordinator(
                 if (request == generation && state?.file?.id == file.id) {
                     state = state?.copy(loading = false, error = it.message ?: tr("Không thể mở tệp."))
                 }
+            }
+        }
+    }
+
+    fun openLocal(file: DriveFile, queue: List<DriveFile> = listOf(file), minimized: Boolean = false) {
+        if (file.isFolder) return
+        if (!isPreviewable(file)) {
+            Toast.makeText(context, tr("Không thể xem loại tệp này."), Toast.LENGTH_SHORT).show()
+            return
+        }
+        localPreview = true
+        awaitingTokenFor = null
+        val request = ++generation
+        mediaPrefetchJob?.cancel()
+        mediaPrefetchJob = null
+        requestedPrefetchAfterMediaId = null
+        val browsingQueue = if (isSwipePreview(file)) queue.filter(::isSwipePreview).ifEmpty { listOf(file) } else emptyList()
+        val images = browsingQueue.filter { it.mimeType.startsWith("image/") }.associate { it.id to it.id }
+        state = ViewerState(file = file, localPath = file.id, loading = true, minimized = minimized,
+            swipeQueue = browsingQueue, swipeIndex = browsingQueue.indexOfFirst { it.id == file.id }, previewPaths = images)
+        if (isMediaPreview(file)) {
+            requestNotificationPermission()
+            val sources = browsingQueue.filter(::isMediaPreview).map {
+                PlaybackSource("LOCAL:${it.id}", it, "LOCAL", null, null, File(it.id))
+            }
+            PlaybackSourceRegistry.replace(sources)
+            scope.launch {
+                val result = runCatching {
+                    val controller = player() ?: awaitPlayer()
+                    if (request != generation) return@launch
+                    val index = sources.indexOfFirst { it.file.id == file.id }
+                    val id = sources[index].mediaId
+                    val position = if (controller.currentMediaItem?.mediaId == id) controller.currentPosition
+                        else PlaybackProgress.read(context, id)
+                    controller.setMediaItems(sources.map(PlaybackSource::toMediaItem), index, position)
+                    controller.prepare()
+                    controller.play()
+                }
+                if (request == generation) state = state?.copy(loading = false, error = result.exceptionOrNull()?.message)
+            }
+        } else {
+            val sharesMediaQueue = file.mimeType.startsWith("image/") &&
+                PlaybackSourceRegistry.all().any { source ->
+                    source.accountType == "LOCAL" && browsingQueue.any { it.id == source.file.id }
+                }
+            if (sharesMediaQueue) player()?.pause()
+            else {
+                player()?.stop()
+                player()?.clearMediaItems()
+                PlaybackSourceRegistry.clear()
+            }
+            scope.launch {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) {
+                        val local = File(file.id)
+                        check(local.isFile && local.canRead()) { tr("Không thể đọc tệp này.") }
+                        if (isTextPreview(file)) {
+                            val bytes = local.inputStream().use { input ->
+                                val output = java.io.ByteArrayOutputStream()
+                                val buffer = ByteArray(8192)
+                                while (output.size() <= MAX_TEXT_PREVIEW_BYTES) {
+                                    val count = input.read(buffer, 0, minOf(buffer.size,
+                                        MAX_TEXT_PREVIEW_BYTES.toInt() + 1 - output.size()))
+                                    if (count < 0) break
+                                    output.write(buffer, 0, count)
+                                }
+                                output.toByteArray()
+                            }
+                            check(bytes.size <= MAX_TEXT_PREVIEW_BYTES) { tr("Nội dung vượt giới hạn 4 MB.") }
+                            bytes.toString(Charsets.UTF_8)
+                        } else null
+                    }
+                }
+                if (request == generation) state = state?.copy(loading = false,
+                    text = result.getOrNull(), error = result.exceptionOrNull()?.message)
             }
         }
     }
@@ -252,7 +330,8 @@ internal class ViewerCoordinator(
             controller.play()
             syncToMediaItem(controller.getMediaItemAt(mediaIndex))
         } else {
-            open(target, minimized = current.minimized, swipeQueue = queue)
+            if (localPreview) openLocal(target, queue, current.minimized)
+            else open(target, minimized = current.minimized, swipeQueue = queue)
         }
     }
 
@@ -287,7 +366,9 @@ internal class ViewerCoordinator(
         val current = state ?: return
         val text = current.text ?: return
         if (current.saving) return
-        val account = activeAccount() ?: return
+        val local = localPreview
+        val account = activeAccount()
+        if (!local && account == null) return
         val content = text.toByteArray(Charsets.UTF_8)
         if (content.size > MAX_TEXT_PREVIEW_BYTES) {
             Toast.makeText(context, tr("Nội dung vượt giới hạn 4 MB."), Toast.LENGTH_SHORT).show()
@@ -298,6 +379,11 @@ internal class ViewerCoordinator(
         scope.launch {
             val result = runCatching {
                 withContext(Dispatchers.IO) {
+                    if (local) {
+                        File(current.file.id).writeBytes(content)
+                        return@withContext
+                    }
+                    requireNotNull(account)
                     when (account.type) {
                         AccountType.S3 -> {
                             val config = s3Config(account) ?: error(tr("Không tìm thấy cấu hình S3."))
@@ -365,6 +451,8 @@ internal class ViewerCoordinator(
         val current = sources[currentIndex]
         val next = sources.getOrNull(currentIndex + 1) ?: return
 
+        // S3 page players buffer their own HTTP streams; never download whole objects for prefetch.
+        if (current.accountType in setOf("S3", "LOCAL") || next.accountType in setOf("S3", "LOCAL")) return
         if (next.cacheFile.isFile && next.cacheFile.length() > 0L) return
 
         val job = scope.launch(Dispatchers.IO) {
