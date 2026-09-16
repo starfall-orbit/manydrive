@@ -28,14 +28,40 @@ for apk in "${apks[@]}"; do
   checksums+=("$checksum")
 done
 
+resolve_exact_tag_commit() {
+  local tag_name="$1"
+  local ref object_type object_sha depth=0
+
+  ref="$(gh api "repos/$repo/git/ref/tags/$tag_name" --jq '[.object.type,.object.sha] | @tsv' 2>/dev/null)" || return 1
+  IFS=$'\t' read -r object_type object_sha <<< "$ref"
+
+  while [[ "$object_type" == "tag" ]]; do
+    depth=$((depth + 1))
+    (( depth <= 8 )) || { echo "Tag $tag_name is nested too deeply." >&2; return 2; }
+    ref="$(gh api "repos/$repo/git/tags/$object_sha" --jq '[.object.type,.object.sha] | @tsv')"
+    IFS=$'\t' read -r object_type object_sha <<< "$ref"
+  done
+
+  [[ "$object_type" == "commit" ]] || { echo "Tag $tag_name does not resolve to a commit." >&2; return 2; }
+  printf '%s\n' "$object_sha"
+}
+
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
-  # A rerun may replace assets only for the same source commit.
-  release_commit="$(gh api "repos/$repo/commits/$tag" --jq .sha)"
-  [[ "$release_commit" == "$commit" ]] || { echo "Release $tag belongs to another commit. Increase the app version." >&2; exit 1; }
+  release_commit="$(resolve_exact_tag_commit "$tag")" || {
+    echo "Release $tag exists, but its exact Git tag could not be resolved." >&2
+    exit 1
+  }
+  [[ "$release_commit" == "$commit" ]] || {
+    echo "Release $tag belongs to another commit. Increase the app version." >&2
+    exit 1
+  }
 else
-  # If a tag already exists without a release, it must also match this build.
-  existing_commit="$(gh api "repos/$repo/commits/$tag" --jq .sha 2>/dev/null || true)"
-  [[ -z "$existing_commit" || "$existing_commit" == "$commit" ]] || { echo "Tag $tag belongs to another commit." >&2; exit 1; }
+  if existing_commit="$(resolve_exact_tag_commit "$tag")"; then
+    [[ "$existing_commit" == "$commit" ]] || {
+      echo "Tag $tag belongs to another commit." >&2
+      exit 1
+    }
+  fi
   gh release create "$tag" --repo "$repo" --target "$commit" \
     --title "ManyDrive $version" --generate-notes --draft
 fi
