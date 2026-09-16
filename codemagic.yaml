@@ -33,30 +33,39 @@ workflows:
         - ManyDrive
     scripts:
       - name: Set up Android SDK
+        ignore_failure: false
         script: |
+          set -euo pipefail
           printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/local.properties"
       - name: Check release signing credentials
+        ignore_failure: false
         script: |
-          set -eu
+          set -euo pipefail
           : "${CM_KEYSTORE_PATH:?Missing keystore path}"
           : "${CM_KEYSTORE_PASSWORD:?Missing keystore password}"
           : "${CM_KEY_ALIAS:?Missing key alias}"
           : "${CM_KEY_PASSWORD:?Missing key password}"
           test -f "$CM_KEYSTORE_PATH"
       - name: Prepare GitHub release publishing
+        ignore_failure: false
         script: |
-          set -eu
+          set -euo pipefail
           GITHUB_RELEASE_TOKEN="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
           : "${GITHUB_RELEASE_TOKEN:?Set secret GITHUB_TOKEN (or GH_TOKEN) in environment group github_release}"
           if ! command -v gh >/dev/null 2>&1; then
             brew install gh --quiet
           fi
+          gh --version >/dev/null
       - name: Build ABI-specific release APKs
+        ignore_failure: false
         script: |
+          set -euo pipefail
           chmod +x gradlew
           ./gradlew :app:assembleRelease --no-daemon --stacktrace
       - name: Publish APKs and SHA-1 checksums to GitHub Release
+        ignore_failure: false
         script: |
+          set -euo pipefail
           bash scripts/publish-github-release.sh
     artifacts:
       - app/build/outputs/apk/release/*.apk
