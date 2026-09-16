@@ -19,8 +19,14 @@ fi
 commit="$(git rev-parse HEAD)"
 shopt -s nullglob
 apks=(app/build/outputs/apk/release/*.apk)
-aabs=(app/build/outputs/bundle/release/*.aab)
-(( ${#apks[@]} > 0 && ${#aabs[@]} > 0 )) || { echo 'Missing release APKs or AAB.' >&2; exit 1; }
+(( ${#apks[@]} > 0 )) || { echo 'Missing release APKs.' >&2; exit 1; }
+checksums=()
+for apk in "${apks[@]}"; do
+  checksum="$apk.sha1"
+  hash="$(shasum -a 1 "$apk" | awk '{print $1}')"
+  printf '%s  %s\n' "$hash" "$(basename "$apk")" > "$checksum"
+  checksums+=("$checksum")
+done
 
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
   # A rerun may replace assets only for the same source commit.
@@ -34,6 +40,6 @@ else
     --title "ManyDrive $version" --generate-notes --draft
 fi
 
-gh release upload "$tag" "${apks[@]}" "${aabs[@]}" --repo "$repo" --clobber
+gh release upload "$tag" "${apks[@]}" "${checksums[@]}" --repo "$repo" --clobber
 gh release edit "$tag" --repo "$repo" --draft=false
 gh release view "$tag" --repo "$repo" --json url --jq .url

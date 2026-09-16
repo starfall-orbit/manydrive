@@ -51,13 +51,13 @@ workflows:
           if ! command -v gh >/dev/null 2>&1; then
             brew install gh --quiet
           fi
-      - name: Build ABI-specific release APKs and AAB
+      - name: Build ABI-specific release APKs
         script: |
           chmod +x gradlew
-          ./gradlew :app:assembleRelease :app:bundleRelease --no-daemon --stacktrace
-      - name: Publish APKs and AAB to GitHub Release
+          ./gradlew :app:assembleRelease --no-daemon --stacktrace
+      - name: Publish APKs and SHA-1 checksums to GitHub Release
         script: |
           bash scripts/publish-github-release.sh
     artifacts:
       - app/build/outputs/apk/release/*.apk
-      - app/build/outputs/bundle/release/*.aab
+      - app/build/outputs/apk/release/*.sha1
