@@ -459,6 +459,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        if (isFinishing) MediaPagePlayback.owner.value?.endAppSession()
         playback?.removeListener(playbackListener)
         controllerFuture?.let(MediaController::releaseFuture)
         playback = null

@@ -218,15 +218,59 @@ internal fun createMediaPagePlayer(context: android.content.Context): ExoPlayer 
         .setBufferDurationsMs(1000, 5000, 250, 500).build())
     .build().apply { volume = 0f; playWhenReady = false }
 
-/** Stable account/file IDs keep resume positions independent of playlist order. */
-internal object PlaybackProgress {
-    fun read(context: android.content.Context, id: String): Long =
-        context.getSharedPreferences("playback_progress", android.content.Context.MODE_PRIVATE).getLong(id, 0L)
+/** Only the selected media survives process death; other positions belong to this session. */
+internal class PlaybackProgressStore(private val preferences: android.content.SharedPreferences) {
+    private val positions = mutableMapOf<String, Long>()
+    private var activeId: String? = preferences.getString("active_id", null)
 
-    fun save(context: android.content.Context, id: String?, position: Long) {
-        if (!id.isNullOrBlank()) context.getSharedPreferences("playback_progress", android.content.Context.MODE_PRIVATE)
-            .edit().putLong(id, position.coerceAtLeast(0L)).apply()
+    init {
+        activeId?.let { positions[it] = preferences.getLong("active_position", 0L).coerceAtLeast(0L) }
+        // Discard legacy per-media history, whose active item cannot be determined.
+        persist()
     }
+
+    fun read(id: String): Long = positions[id] ?: 0L
+
+    fun save(id: String?, position: Long) {
+        if (id.isNullOrBlank()) return
+        positions[id] = position.coerceAtLeast(0L)
+        if (id == activeId) persist()
+    }
+
+    fun activate(id: String?, position: Long = 0L) {
+        activeId = id?.takeIf { it.isNotBlank() }
+        activeId?.let { positions[it] = position.coerceAtLeast(0L) }
+        persist()
+    }
+
+    fun retainActive() {
+        positions.keys.retainAll(setOfNotNull(activeId))
+    }
+
+    fun clear() {
+        activeId = null
+        positions.clear()
+        persist()
+    }
+
+    private fun persist() {
+        preferences.edit().clear().apply {
+            activeId?.let { putString("active_id", it); putLong("active_position", read(it)) }
+        }.apply()
+    }
+}
+
+internal object PlaybackProgress {
+    private var store: PlaybackProgressStore? = null
+    private fun store(context: Context): PlaybackProgressStore = store ?: PlaybackProgressStore(
+        context.applicationContext.getSharedPreferences("playback_progress", Context.MODE_PRIVATE)
+    ).also { store = it }
+
+    fun read(context: Context, id: String): Long = store(context).read(id)
+    fun save(context: Context, id: String?, position: Long) = store(context).save(id, position)
+    fun activate(context: Context, id: String?, position: Long = 0L) = store(context).activate(id, position)
+    fun retainActive(context: Context) = store(context).retainActive()
+    fun clear(context: Context) = store(context).clear()
 }
 
 /** Shared with the in-process viewer; playback policy is enforced by the service. */
@@ -402,6 +446,7 @@ class MediaPlaybackService : MediaSessionService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        player.endAppSession()
         // Keep playing if playback is active. The default MediaSessionService behavior then keeps the
         // foreground service and notification alive even after the task is swiped away.
         if (!player.playWhenReady || player.playbackState == Player.STATE_ENDED || player.mediaItemCount == 0) {

@@ -16,6 +16,7 @@ class PagedPlaybackPlayerTest {
     private fun withPlayer(test: (PagedPlaybackPlayer) -> Unit) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {
+            PlaybackProgress.clear(instrumentation.targetContext)
             val player = PagedPlaybackPlayer(instrumentation.targetContext)
             try {
                 // No remote data or credentials are required to verify player ownership.
@@ -25,8 +26,26 @@ class PagedPlaybackPlayerTest {
                 test(player)
             } finally {
                 player.release()
+                PlaybackProgress.clear(instrumentation.targetContext)
             }
         }
+    }
+
+    @Test fun taskExitResetsNeighborsAndClosingResetsActiveMedia() = withPlayer { session ->
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val first = session.acquire("pager-test-0")!!
+        session.seekTo(0, 60_000L)
+        session.seekTo(1, 120_000L)
+        assertEquals(60_000L, PlaybackProgress.read(context, "pager-test-0"))
+        session.endAppSession()
+        assertEquals(0L, first.currentPosition)
+        assertEquals(0L, PlaybackProgress.read(context, "pager-test-0"))
+        assertEquals(120_000L, PlaybackProgress.read(context, "pager-test-1"))
+        session.stop()
+        session.clearMediaItems()
+        assertEquals(0L, PlaybackProgress.read(context, "pager-test-1"))
+        val prefs = context.getSharedPreferences("playback_progress", android.content.Context.MODE_PRIVATE)
+        assertTrue(prefs.all.isEmpty())
     }
 
     @Test fun selectingPageKeepsBothPlayersAndTheirItems() = withPlayer { session ->

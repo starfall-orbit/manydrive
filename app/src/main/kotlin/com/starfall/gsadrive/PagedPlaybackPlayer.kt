@@ -67,6 +67,7 @@ internal class PagedPlaybackPlayer(
             player.pause()
             activeId = null
             setPlayer(idlePlayer)
+            PlaybackProgress.activate(context, null)
         }
         releaseUnused()
     }
@@ -98,6 +99,17 @@ internal class PagedPlaybackPlayer(
         val delegate = createMediaPagePlayer(context)
         delegate.setMediaItem(item, PlaybackProgress.read(context, item.mediaId))
         delegate.addListener(object : Player.Listener {
+            override fun onPositionDiscontinuity(
+                oldPosition: Player.PositionInfo,
+                newPosition: Player.PositionInfo,
+                reason: Int
+            ) {
+                // Page controls can seek directly, including while playback is paused.
+                if (activeId == item.mediaId) {
+                    PlaybackProgress.save(context, item.mediaId, newPosition.positionMs)
+                }
+            }
+
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState != Player.STATE_ENDED || activeId != item.mediaId) return
                 PlaybackProgress.save(context, item.mediaId, 0L)
@@ -139,6 +151,7 @@ internal class PagedPlaybackPlayer(
         if (positionMs != C.TIME_UNSET && next.currentPosition != positionMs) next.seekTo(positionMs)
         else if (positionMs == C.TIME_UNSET && next.playbackState == Player.STATE_ENDED) next.seekTo(0L)
         if (next.playbackState == Player.STATE_IDLE) next.prepare()
+        PlaybackProgress.activate(context, item.mediaId, next.currentPosition)
         next.playWhenReady = play
         invalidateState()
         releaseUnused()
@@ -186,7 +199,10 @@ internal class PagedPlaybackPlayer(
         val play = player.playWhenReady
         val changed = items != mediaItems
         items = mediaItems.toList()
-        if (items.isEmpty()) clearPages()
+        if (items.isEmpty()) {
+            clearPages()
+            PlaybackProgress.clear(context)
+        }
         else select(if (startIndex == C.INDEX_UNSET) 0 else startIndex, startPositionMs, play)
         if (changed) revision.value++
         invalidateState()
@@ -196,6 +212,7 @@ internal class PagedPlaybackPlayer(
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
         if (items.getOrNull(mediaItemIndex)?.mediaId == activeId) {
             player.seekTo(if (positionMs == C.TIME_UNSET) 0L else positionMs)
+            PlaybackProgress.save(context, activeId, player.currentPosition)
         } else {
             // Previous/next and swipes all activate the same page-owned player.
             val target = items.getOrNull(mediaItemIndex)
@@ -249,6 +266,15 @@ internal class PagedPlaybackPlayer(
         }
     }
 
+    /** A task can exit while its foreground playback service stays alive. */
+    fun endAppSession() {
+        PlaybackProgress.activate(context, activeId,
+            if (player.playbackState == Player.STATE_ENDED) 0L else player.currentPosition)
+        PlaybackProgress.retainActive(context)
+        // Resident neighbor players must not resurrect positions from the previous app session.
+        pages.forEach { (id, page) -> if (id != activeId) page.player.seekTo(0L) }
+    }
+
     private fun clearPages() {
         player.pause()
         activeId = null
@@ -261,6 +287,7 @@ internal class PagedPlaybackPlayer(
         released = true
         handler.removeCallbacksAndMessages(null)
         clearPages()
+        PlaybackProgress.retainActive(context)
         return super.handleRelease()
     }
 }

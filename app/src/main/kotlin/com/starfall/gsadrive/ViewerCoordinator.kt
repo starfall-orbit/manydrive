@@ -261,6 +261,7 @@ internal class ViewerCoordinator(
         ++generation
         player()?.stop()
         player()?.clearMediaItems()
+        PlaybackProgress.clear(context)
         requestedPrefetchAfterMediaId = null
         mediaPrefetchJob?.cancel()
         mediaPrefetchJob = null
