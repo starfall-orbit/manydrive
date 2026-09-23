@@ -61,3 +61,9 @@ Access keys and imported private keys are encrypted with AES-GCM using device-bo
 Drive file operations use `google-api-services-drive`, with Google Auth Library for service-account JWT signing and token exchange. S3 uses the official AWS SDK for Kotlin. Access tokens are supplied separately for each Google client; upload/download content is streamed by the SDK.
 
 Google Photos uses the [Library REST API](https://developers.google.com/photos/library/guides/upload-media) through the official Google HTTP Client with `photoslibrary.appendonly`. There is no separate Photos browser or Picker. The “Tải lên Google Photos” menu is available for images, videos, and folders from Google Drive, S3, and Service Accounts. Google Drive uploads to the active Google account; other sources prompt for a connected Google destination. A folder creates an album with the same name and uploads images/videos recursively, skipping other files. Individual media files upload directly to the library. Transfers use temporary files, remove them after each upload, and report success/failure counts.
+
+## License
+
+[![License: Starfall Contributor Commercial Copyleft](https://img.shields.io/badge/license-Starfall%20Contributor%20Commercial%20Copyleft-blue.svg)](LICENSE)
+
+This project is **source-available, not OSI open source**. Non-commercial use, modification, and redistribution are allowed under the copyleft terms in [LICENSE](LICENSE). Commercial use is allowed only for a person or organization that has made a qualifying code contribution accepted and merged into this repository, or that has separate written permission from the relevant copyright holders. Distribution of modified or binary versions must keep the same license and make the corresponding source available.
